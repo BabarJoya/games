@@ -389,16 +389,22 @@ const App = () => {
     const existingName = dbUser?.username || null;
 
     // ── PUBG: real API lookup ──
-    // Dev: uses Vite proxy (/pubg-api → api.pubg.com)
-    // Prod: uses Vercel serverless function (/api/pubg)
+    // Dev: Vite proxy (/pubg-api → api.pubg.com) handles all three fetch helpers
+    // Prod: Vercel serverless functions (/api/pubg, /api/pubg-seasons, /api/pubg-stats)
     const fetchPubgShard = (shard, name) => {
-      if (import.meta.env.DEV) {
-        return fetch(
-          `/pubg-api/shards/${shard}/players?filter[playerNames]=${encodeURIComponent(name)}`,
-          { headers: { 'Accept': 'application/vnd.api+json' } }
-        );
-      }
+      if (import.meta.env.DEV)
+        return fetch(`/pubg-api/shards/${shard}/players?filter[playerNames]=${encodeURIComponent(name)}`, { headers: { 'Accept': 'application/vnd.api+json' } });
       return fetch(`/api/pubg?shard=${shard}&playerName=${encodeURIComponent(name)}`);
+    };
+    const fetchPubgSeasons = (shard) => {
+      if (import.meta.env.DEV)
+        return fetch(`/pubg-api/shards/${shard}/seasons`, { headers: { 'Accept': 'application/vnd.api+json' } });
+      return fetch(`/api/pubg-seasons?shard=${shard}`);
+    };
+    const fetchPubgStats = (shard, accountId, seasonId) => {
+      if (import.meta.env.DEV)
+        return fetch(`/pubg-api/shards/${shard}/players/${encodeURIComponent(accountId)}/seasons/${encodeURIComponent(seasonId)}`, { headers: { 'Accept': 'application/vnd.api+json' } });
+      return fetch(`/api/pubg-stats?shard=${shard}&accountId=${encodeURIComponent(accountId)}&seasonId=${encodeURIComponent(seasonId)}`);
     };
 
     if (selectedService.id === 'pubg') {
@@ -414,12 +420,51 @@ const App = () => {
         }
         if (found) {
           const realName = found.player.attributes?.name || cleanId;
+          const accountId = found.player.id;
           if (!existingName) await updateBalance(cleanId, 'pubg', 0, 'add', realName);
+
+          // ── Fetch current season stats (best-effort, non-blocking) ──
+          let seasonStats = null;
+          try {
+            const seasonsRes = await fetchPubgSeasons(found.shard);
+            if (seasonsRes.ok) {
+              const seasonsJson = await seasonsRes.json();
+              const currentSeason = (seasonsJson.data || []).find(s => s.attributes?.isCurrentSeason);
+              if (currentSeason) {
+                const statsRes = await fetchPubgStats(found.shard, accountId, currentSeason.id);
+                if (statsRes.ok) {
+                  const statsJson = await statsRes.json();
+                  // Aggregate all squad/duo/solo game modes
+                  const modes = statsJson.data?.attributes?.gameModeStats || {};
+                  const totals = Object.values(modes).reduce((acc, m) => ({
+                    kills:    acc.kills    + (m.kills    || 0),
+                    wins:     acc.wins     + (m.wins     || 0),
+                    rounds:   acc.rounds   + (m.roundsPlayed || 0),
+                    top10s:   acc.top10s   + (m.top10s   || 0),
+                    damage:   acc.damage   + (m.damageDealt || 0),
+                  }), { kills: 0, wins: 0, rounds: 0, top10s: 0, damage: 0 });
+                  if (totals.rounds > 0) {
+                    seasonStats = {
+                      kills: totals.kills,
+                      wins: totals.wins,
+                      rounds: totals.rounds,
+                      kd: totals.rounds > totals.wins
+                        ? (totals.kills / (totals.rounds - totals.wins)).toFixed(2)
+                        : totals.kills.toFixed(2),
+                      top10Rate: Math.round((totals.top10s / totals.rounds) * 100),
+                      seasonId: currentSeason.id.replace('division.bro.official.', '').toUpperCase(),
+                    };
+                  }
+                }
+              }
+            }
+          } catch { /* season stats are optional — silently ignore errors */ }
+
           setAccountData({
-            username: realName, accountId: found.player.id,
+            username: realName, accountId,
             region: found.shard.toUpperCase(), currentBalance: existingBal,
             avatarColor: 'bg-gradient-to-br from-orange-500 to-yellow-500',
-            isRealProfile: true,
+            isRealProfile: true, seasonStats,
           });
         } else {
           setAccountData({ notFound: true });
@@ -754,26 +799,53 @@ const App = () => {
                           </div>
                         </div>
                       ) : (
-                        <div className="bg-gradient-to-r from-cyan-500/10 to-transparent border border-cyan-500/20 rounded-2xl p-4 md:p-5 flex flex-col sm:flex-row items-center gap-4">
-                          <div className={`w-14 h-14 rounded-2xl ${accountData.avatarColor} flex items-center justify-center text-white flex-shrink-0`}>
-                            <UserCircle2 className="w-8 h-8" />
-                          </div>
-                          <div className="flex-1 text-center sm:text-left">
-                            <div className="flex items-center justify-center sm:justify-start gap-2 mb-1 flex-wrap">
-                              <h4 className="text-lg font-black text-white">{accountData.username}</h4>
-                              <span className={`text-[10px] px-2 py-0.5 rounded font-black uppercase ${accountData.isRealProfile ? 'bg-green-500 text-black' : 'bg-cyan-500 text-black'}`}>
-                                {accountData.isRealProfile ? '✓ Verified' : 'Active'}
-                              </span>
+                        <div className="bg-gradient-to-r from-cyan-500/10 to-transparent border border-cyan-500/20 rounded-2xl overflow-hidden">
+                          {/* Main player row */}
+                          <div className="p-4 md:p-5 flex flex-col sm:flex-row items-center gap-4">
+                            <div className={`w-14 h-14 rounded-2xl ${accountData.avatarColor} flex items-center justify-center text-white flex-shrink-0`}>
+                              <UserCircle2 className="w-8 h-8" />
                             </div>
-                            <div className="flex justify-center sm:justify-start gap-3 text-xs font-bold text-gray-500 flex-wrap">
-                              <span className="flex items-center gap-1 uppercase"><Globe className="w-3 h-3 text-blue-400" /> {accountData.region}</span>
-                              {accountData.accountId && <span className="font-mono text-gray-600">{accountData.accountId.slice(0, 16)}…</span>}
+                            <div className="flex-1 text-center sm:text-left">
+                              <div className="flex items-center justify-center sm:justify-start gap-2 mb-1 flex-wrap">
+                                <h4 className="text-lg font-black text-white">{accountData.username}</h4>
+                                <span className={`text-[10px] px-2 py-0.5 rounded font-black uppercase ${accountData.isRealProfile ? 'bg-green-500 text-black' : 'bg-cyan-500 text-black'}`}>
+                                  {accountData.isRealProfile ? '✓ Verified' : 'Active'}
+                                </span>
+                              </div>
+                              <div className="flex justify-center sm:justify-start gap-3 text-xs font-bold text-gray-500 flex-wrap">
+                                <span className="flex items-center gap-1 uppercase"><Globe className="w-3 h-3 text-blue-400" /> {accountData.region}</span>
+                                {accountData.accountId && <span className="font-mono text-gray-600">{accountData.accountId.slice(0, 16)}…</span>}
+                              </div>
+                            </div>
+                            <div className="text-center sm:text-right">
+                              <div className="text-[10px] font-black text-gray-500 uppercase">Balance</div>
+                              <div className="text-xl font-black text-cyan-400">{accountData.currentBalance} {selectedService.unit}</div>
                             </div>
                           </div>
-                          <div className="text-center sm:text-right">
-                            <div className="text-[10px] font-black text-gray-500 uppercase">Balance</div>
-                            <div className="text-xl font-black text-cyan-400">{accountData.currentBalance} {selectedService.unit}</div>
-                          </div>
+
+                          {/* Season stats strip — only shown for verified PUBG players with stats */}
+                          {accountData.seasonStats && (
+                            <div className="border-t border-cyan-500/10 bg-black/20 px-4 py-3">
+                              <div className="text-[9px] font-black text-gray-600 uppercase tracking-widest mb-2">
+                                Season Stats · {accountData.seasonStats.seasonId}
+                              </div>
+                              <div className="grid grid-cols-4 gap-2">
+                                {[
+                                  { label: 'Matches', value: accountData.seasonStats.rounds },
+                                  { label: 'Kills',   value: accountData.seasonStats.kills },
+                                  { label: 'K/D',     value: accountData.seasonStats.kd,     highlight: true },
+                                  { label: 'Wins',    value: accountData.seasonStats.wins,    highlight: true },
+                                ].map(stat => (
+                                  <div key={stat.label} className="text-center bg-white/5 rounded-xl py-2 px-1">
+                                    <div className={`text-base font-black leading-none ${stat.highlight ? 'text-orange-400' : 'text-white'}`}>
+                                      {stat.value}
+                                    </div>
+                                    <div className="text-[9px] font-bold text-gray-600 uppercase mt-1">{stat.label}</div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
