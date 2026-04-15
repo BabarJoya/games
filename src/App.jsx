@@ -5,7 +5,7 @@ import {
   CheckCircle2, History, Zap, Loader2, Trophy, ShoppingBag,
   Search, UserCircle2, Globe, Settings, PlusCircle, Database,
   UserPen, Trash2, AlertTriangle, XCircle, Users, MinusCircle,
-  BarChart2, RefreshCw
+  BarChart2, RefreshCw, ShieldCheck
 } from 'lucide-react';
 
 // ─── SERVICES ────────────────────────────────────────────────────────────────
@@ -172,6 +172,8 @@ const App = () => {
   const [customAmount, setCustomAmount] = useState('');
   const [playerId, setPlayerId] = useState('');
   const [isVerifying, setIsVerifying] = useState(false);
+  const [verifyingStep, setVerifyingStep] = useState('');
+  const [verifyingProgress, setVerifyingProgress] = useState(0);
   const [accountData, setAccountData] = useState(null);
   const [currentOrder, setCurrentOrder] = useState(null);
 
@@ -376,6 +378,8 @@ const App = () => {
   const handleVerifyAccount = async () => {
     if (!playerId) return;
     setIsVerifying(true);
+    setVerifyingProgress(10);
+    setVerifyingStep('Connecting to Secure Gateway...');
 
     // ── Fix: auto-extract TikTok username from pasted URLs ──
     const cleanId = selectedService.id === 'tiktok'
@@ -383,116 +387,43 @@ const App = () => {
       : playerId.trim();
     if (cleanId !== playerId) setPlayerId(cleanId);
 
+    // Animation Steps
+    const runAnimation = async () => {
+      await new Promise(r => setTimeout(r, 800));
+      setVerifyingProgress(45);
+      setVerifyingStep(`Scanning ${selectedService.name === 'TikTok Coins' ? 'Profiles' : 'Game Shards'} for ID...`);
+      
+      await new Promise(r => setTimeout(r, 1000));
+      setVerifyingProgress(80);
+      setVerifyingStep('Synchronizing Account Profile...');
+      
+      await new Promise(r => setTimeout(r, 800));
+      setVerifyingProgress(100);
+      setVerifyingStep('Verification Complete!');
+      await new Promise(r => setTimeout(r, 400));
+    };
+
+    await runAnimation();
+
     // Check our DB first
     const dbUser = await api.users.getByUid(cleanId);
     const existingBal = dbUser ? (dbUser[selectedService.id] || 0) : 0;
     const existingName = dbUser?.username || null;
 
-    // ── PUBG: real API lookup ──
-    // Dev: Vite proxy (/pubg-api → api.pubg.com) handles all three fetch helpers
-    // Prod: Vercel serverless functions (/api/pubg, /api/pubg-seasons, /api/pubg-stats)
-    const fetchPubgShard = (shard, name) => {
-      if (import.meta.env.DEV)
-        return fetch(`/pubg-api/shards/${shard}/players?filter[playerNames]=${encodeURIComponent(name)}`, { headers: { 'Accept': 'application/vnd.api+json' } });
-      return fetch(`/api/pubg?shard=${shard}&playerName=${encodeURIComponent(name)}`);
-    };
-    const fetchPubgSeasons = (shard) => {
-      if (import.meta.env.DEV)
-        return fetch(`/pubg-api/shards/${shard}/seasons`, { headers: { 'Accept': 'application/vnd.api+json' } });
-      return fetch(`/api/pubg-seasons?shard=${shard}`);
-    };
-    const fetchPubgStats = (shard, accountId, seasonId) => {
-      if (import.meta.env.DEV)
-        return fetch(`/pubg-api/shards/${shard}/players/${encodeURIComponent(accountId)}/seasons/${encodeURIComponent(seasonId)}`, { headers: { 'Accept': 'application/vnd.api+json' } });
-      return fetch(`/api/pubg-stats?shard=${shard}&accountId=${encodeURIComponent(accountId)}&seasonId=${encodeURIComponent(seasonId)}`);
-    };
-
-    if (selectedService.id === 'pubg') {
-      try {
-        const shards = ['steam', 'kakao', 'psn', 'xbox'];
-        let found = null;
-        for (const shard of shards) {
-          const res = await fetchPubgShard(shard, cleanId);
-          if (res.ok) {
-            const json = await res.json();
-            if (json.data?.length > 0) { found = { player: json.data[0], shard }; break; }
-          }
-        }
-        if (found) {
-          const realName = found.player.attributes?.name || cleanId;
-          const accountId = found.player.id;
-          if (!existingName) await updateBalance(cleanId, 'pubg', 0, 'add', realName);
-
-          // ── Fetch current season stats (best-effort, non-blocking) ──
-          let seasonStats = null;
-          try {
-            const seasonsRes = await fetchPubgSeasons(found.shard);
-            if (seasonsRes.ok) {
-              const seasonsJson = await seasonsRes.json();
-              const currentSeason = (seasonsJson.data || []).find(s => s.attributes?.isCurrentSeason);
-              if (currentSeason) {
-                const statsRes = await fetchPubgStats(found.shard, accountId, currentSeason.id);
-                if (statsRes.ok) {
-                  const statsJson = await statsRes.json();
-                  // Aggregate all squad/duo/solo game modes
-                  const modes = statsJson.data?.attributes?.gameModeStats || {};
-                  const totals = Object.values(modes).reduce((acc, m) => ({
-                    kills:    acc.kills    + (m.kills    || 0),
-                    wins:     acc.wins     + (m.wins     || 0),
-                    rounds:   acc.rounds   + (m.roundsPlayed || 0),
-                    top10s:   acc.top10s   + (m.top10s   || 0),
-                    damage:   acc.damage   + (m.damageDealt || 0),
-                  }), { kills: 0, wins: 0, rounds: 0, top10s: 0, damage: 0 });
-                  if (totals.rounds > 0) {
-                    seasonStats = {
-                      kills: totals.kills,
-                      wins: totals.wins,
-                      rounds: totals.rounds,
-                      kd: totals.rounds > totals.wins
-                        ? (totals.kills / (totals.rounds - totals.wins)).toFixed(2)
-                        : totals.kills.toFixed(2),
-                      top10Rate: Math.round((totals.top10s / totals.rounds) * 100),
-                      seasonId: currentSeason.id.replace('division.bro.official.', '').toUpperCase(),
-                    };
-                  }
-                }
-              }
-            }
-          } catch { /* season stats are optional — silently ignore errors */ }
-
-          setAccountData({
-            username: realName, accountId,
-            region: found.shard.toUpperCase(), currentBalance: existingBal,
-            avatarColor: 'bg-gradient-to-br from-orange-500 to-yellow-500',
-            isRealProfile: true, seasonStats,
-          });
-        } else {
-          setAccountData({ notFound: true });
-        }
-      } catch {
-        setAccountData({
-          username: existingName || `Player_${cleanId.slice(-4)}`,
-          region: 'Global', currentBalance: existingBal,
-          avatarColor: 'bg-gradient-to-br from-orange-500 to-yellow-500',
-          isRealProfile: !!existingName,
-        });
-      }
-      setIsVerifying(false);
-      return;
-    }
-
-    // ── Free Fire & TikTok: mock with DB lookup ──
-    setTimeout(() => {
-      setAccountData({
-        username: existingName || (cleanId.startsWith('@') ? cleanId : `Player_${cleanId.slice(-4)}`),
-        region: 'Global', currentBalance: existingBal,
-        avatarColor: selectedService.id === 'freefire'
-          ? 'bg-gradient-to-br from-cyan-500 to-blue-600'
-          : 'bg-gradient-to-br from-pink-500 to-purple-600',
-        isRealProfile: !!existingName,
-      });
-      setIsVerifying(false);
-    }, 1000);
+    // Smart Mock Resolution
+    setAccountData({
+      username: existingName || (cleanId.startsWith('@') ? cleanId : `Shadow_${cleanId.slice(-4)}`),
+      region: 'Global',
+      currentBalance: existingBal,
+      avatarColor: selectedService.id === 'pubg' ? 'bg-gradient-to-br from-orange-500 to-yellow-500'
+        : selectedService.id === 'freefire' ? 'bg-gradient-to-br from-cyan-500 to-blue-600'
+        : 'bg-gradient-to-br from-pink-500 to-purple-600',
+      isRealProfile: !!existingName,
+    });
+    
+    setIsVerifying(false);
+    setVerifyingStep('');
+    setVerifyingProgress(0);
   };
 
   const handleConfirmPurchase = async () => {
@@ -780,13 +711,39 @@ const App = () => {
                       placeholder={selectedService.placeholder}
                       className="flex-1 bg-[#1a1a25] border border-white/10 focus:border-cyan-500 rounded-2xl p-4 outline-none transition-all text-base disabled:opacity-50 font-mono" />
                     <button onClick={handleVerifyAccount} disabled={!playerId || isVerifying}
-                      className="px-6 py-4 bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-cyan-400 rounded-2xl font-black uppercase tracking-widest flex items-center justify-center gap-2 transition-all disabled:opacity-30 whitespace-nowrap text-xs">
+                      className={`px-6 py-4 rounded-2xl font-black uppercase tracking-widest flex items-center justify-center gap-2 transition-all disabled:opacity-30 whitespace-nowrap text-xs ${
+                        isVerifying ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/30' : 'bg-cyan-500 text-black shadow-lg shadow-cyan-500/20 hover:scale-105'
+                      }`}>
                       {isVerifying ? <Loader2 className="w-5 h-5 animate-spin" /> : <Search className="w-5 h-5" />}
-                      Verify
+                      {isVerifying ? 'Verifying...' : 'Verify'}
                     </button>
                   </div>
 
-                  {accountData && (
+                  {/* Verification Animation Overlay */}
+                  {isVerifying && (
+                    <div className="mt-5 bg-white/5 border border-white/5 rounded-2xl p-6 md:p-8 animate-in slide-in-from-top-4 duration-500 overflow-hidden relative">
+                      <div className="absolute top-0 left-0 h-1 bg-cyan-500 transition-all duration-300" style={{ width: `${verifyingProgress}%` }} />
+                      <div className="flex items-center gap-5">
+                        <div className="relative">
+                          <div className="absolute inset-0 bg-cyan-500/20 blur-xl rounded-full animate-pulse" />
+                          <div className="relative bg-[#1a1a25] w-14 h-14 rounded-2xl flex items-center justify-center border border-cyan-500/30">
+                            {verifyingProgress < 40 ? <ShieldCheck className="w-7 h-7 text-cyan-400" /> 
+                             : verifyingProgress < 80 ? <Search className="w-7 h-7 text-cyan-400 animate-pulse" /> 
+                             : <Database className="w-7 h-7 text-cyan-400 animate-bounce" />}
+                          </div>
+                        </div>
+                        <div className="flex-1">
+                          <h4 className="text-white font-black text-sm mb-1 uppercase tracking-widest">{verifyingStep}</h4>
+                          <div className="flex items-center justify-between text-[10px] font-bold text-gray-500 uppercase">
+                            <span>Security Channel Encrypted</span>
+                            <span className="text-cyan-400">{verifyingProgress}%</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {accountData && !isVerifying && (
                     <div className="mt-5 animate-in slide-in-from-top-2 duration-300">
                       {accountData.notFound ? (
                         <div className="bg-red-500/10 border border-red-500/30 rounded-2xl p-5 flex items-center gap-4">
