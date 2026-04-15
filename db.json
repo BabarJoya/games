@@ -1,0 +1,10 @@
+{
+  "users": [],
+  "orders": [],
+  "audit": [],
+  "stock": [
+    { "id": "pubg", "amount": 50000 },
+    { "id": "freefire", "amount": 50000 },
+    { "id": "tiktok", "amount": 50000 }
+  ]
+}
