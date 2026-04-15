@@ -1,14 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  Gamepad2, 
-  Diamond, 
-  Music2, 
-  ArrowLeft, 
-  ChevronRight, 
-  CheckCircle2, 
-  History, 
-  User, 
-  ShieldCheck, 
+import {
+  Gamepad2,
+  Diamond,
+  Music2,
+  ArrowLeft,
+  ChevronRight,
+  CheckCircle2,
+  History,
+  User,
+  ShieldCheck,
   Zap,
   Loader2,
   Trophy,
@@ -32,8 +32,8 @@ const SERVICES = [
     unit: 'UC',
     icon: <Gamepad2 className="w-8 h-8 text-orange-500" />,
     color: 'from-orange-500 to-yellow-600',
-    fieldLabel: 'Player ID',
-    placeholder: 'e.g. 5123456789',
+    fieldLabel: 'Player Username',
+    placeholder: 'e.g. ShadowKiller99',
     packages: [
       { id: 'p1', amount: 60 },
       { id: 'p2', amount: 325 },
@@ -86,10 +86,10 @@ const App = () => {
   const [accountData, setAccountData] = useState(null);
   const [history, setHistory] = useState([]);
   const [currentOrder, setCurrentOrder] = useState(null);
-  
+
   // Mock Database for User Data (Balances + Profiles)
   const [userDatabase, setUserDatabase] = useState({}); // { 'id': { balances: {pubg: 0}, username: 'Name' } }
-  
+
   // Admin State & Global Inventory
   const [globalStock, setGlobalStock] = useState({ pubg: 0, freefire: 0, tiktok: 0 });
   const [adminPass, setAdminPass] = useState('');
@@ -104,7 +104,7 @@ const App = () => {
   useEffect(() => {
     const savedHistory = localStorage.getItem('nexus_order_history');
     if (savedHistory) setHistory(JSON.parse(savedHistory));
-    
+
     const savedDatabase = localStorage.getItem('nexus_user_balances');
     if (savedDatabase) setUserDatabase(JSON.parse(savedDatabase));
 
@@ -125,17 +125,17 @@ const App = () => {
     if (!currentDb[id]) {
       currentDb[id] = { balances: { pubg: 0, freefire: 0, tiktok: 0 }, username: '' };
     }
-    
+
     // Update balance if amount provided
     if (amount !== undefined) {
       currentDb[id].balances[serviceKey] = (currentDb[id].balances[serviceKey] || 0) + parseInt(amount || 0);
     }
-    
+
     // Update username if provided
     if (customUsername) {
       currentDb[id].username = customUsername;
     }
-    
+
     setUserDatabase(currentDb);
     localStorage.setItem('nexus_user_balances', JSON.stringify(currentDb));
     return currentDb[id];
@@ -157,23 +157,83 @@ const App = () => {
     window.scrollTo(0, 0);
   };
 
-  const handleVerifyAccount = () => {
+  const handleVerifyAccount = async () => {
     if (!playerId) return;
     setIsVerifying(true);
-    
-    // Simulate API delay
-    setTimeout(() => {
-      const existingUser = userDatabase[playerId];
-      const existingBalance = existingUser?.balances[selectedService.id] || 0;
-      const existingName = existingUser?.username;
 
+    const existingUser = userDatabase[playerId];
+    const existingBalance = existingUser?.balances[selectedService.id] || 0;
+    const existingName = existingUser?.username;
+
+    // Real PUBG API lookup
+    if (selectedService.id === 'pubg') {
+      try {
+        const shards = ['steam', 'kakao', 'psn', 'xbox', 'stadia'];
+        let found = null;
+
+        for (const shard of shards) {
+          const res = await fetch(
+            `/pubg-api/shards/${shard}/players?filter[playerNames]=${encodeURIComponent(playerId.trim())}`,
+            { headers: { 'Accept': 'application/vnd.api+json' } }
+          );
+          if (res.ok) {
+            const json = await res.json();
+            if (json.data && json.data.length > 0) {
+              found = { player: json.data[0], shard };
+              break;
+            }
+          }
+        }
+
+        if (found) {
+          const { player, shard } = found;
+          const realName = player.attributes?.name || playerId;
+          const accountId = player.id;
+          // Also update admin db with real name
+          if (!existingName) updateUserData(playerId, selectedService.id, undefined, realName);
+          setAccountData({
+            username: realName,
+            accountId,
+            level: Math.floor(Math.random() * 80) + 10,
+            region: shard.toUpperCase(),
+            avatarColor: 'bg-gradient-to-br from-orange-500 to-yellow-500',
+            currentBalance: existingBalance,
+            isRealProfile: true,
+          });
+        } else {
+          setAccountData({
+            username: null,
+            notFound: true,
+            currentBalance: 0,
+            isRealProfile: false,
+          });
+        }
+      } catch {
+        // Fallback to mock on network error
+        setAccountData({
+          username: existingName || `Shadow_${playerId.slice(-3)}`,
+          level: Math.floor(Math.random() * 80) + 10,
+          region: 'Global',
+          avatarColor: 'bg-gradient-to-br from-orange-500 to-yellow-500',
+          currentBalance: existingBalance,
+          isRealProfile: !!existingName,
+        });
+      }
+      setIsVerifying(false);
+      return;
+    }
+
+    // Mock for Free Fire & TikTok
+    setTimeout(() => {
       setAccountData({
-        username: existingName || (playerId.includes('@') ? playerId : `Shadow_${playerId.slice(-3)}`),
+        username: existingName || (playerId.includes('@') ? playerId : `Player_${playerId.slice(-4)}`),
         level: Math.floor(Math.random() * 80) + 10,
         region: 'Global',
-        avatarColor: 'bg-gradient-to-br from-cyan-500 to-purple-500',
+        avatarColor: selectedService.id === 'freefire'
+          ? 'bg-gradient-to-br from-cyan-500 to-blue-600'
+          : 'bg-gradient-to-br from-pink-500 to-purple-600',
         currentBalance: existingBalance,
-        isRealProfile: !!existingName
+        isRealProfile: !!existingName,
       });
       setIsVerifying(false);
     }, 1200);
@@ -183,7 +243,7 @@ const App = () => {
 
   const handleConfirmPurchase = () => {
     if (!resolvedAmount || !playerId || !accountData) return;
-    
+
     // Check stock before proceeding
     if (globalStock[selectedService.id] < resolvedAmount) {
       alert(`Insufficient Global Stock! Only ${globalStock[selectedService.id]} ${selectedService.unit} left.`);
@@ -194,7 +254,7 @@ const App = () => {
 
     setTimeout(() => {
       const updatedUser = updateUserData(playerId, selectedService.id, resolvedAmount);
-      
+
       // Deduct from Global Inventory
       updateGlobalStock(selectedService.id, -resolvedAmount);
 
@@ -263,7 +323,7 @@ const App = () => {
               Pro Seller's
             </span>
           </div>
-          
+
           <div className="flex items-center gap-2 md:gap-4">
             <button onClick={() => setView('history')} className="p-2 hover:bg-white/5 rounded-full transition-colors text-gray-400 hover:text-cyan-400">
               <History className="w-6 h-6" />
@@ -279,7 +339,7 @@ const App = () => {
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 py-6 md:py-8 relative z-10">
-        
+
         {/* VIEW: HOME */}
         {view === 'home' && (
           <div className="animate-in fade-in slide-in-from-bottom-4 duration-700">
@@ -296,7 +356,7 @@ const App = () => {
               <p className="text-gray-400 text-base md:text-xl max-w-2xl mx-auto mb-10 leading-relaxed px-4">
                 The premier destination for instant in-game currency delivery. Trust Pro Seller's for fast, secure, and professional top-ups for your gaming needs.
               </p>
-              
+
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 md:gap-6 mt-16 max-w-5xl mx-auto text-left">
                 {SERVICES.map((service) => (
                   <button
@@ -351,7 +411,7 @@ const App = () => {
                     Step 1: Enter {selectedService.fieldLabel}
                   </label>
                   <div className="flex flex-col sm:flex-row gap-3">
-                    <input 
+                    <input
                       type="text"
                       value={playerId}
                       onChange={(e) => {
@@ -362,7 +422,7 @@ const App = () => {
                       placeholder={selectedService.placeholder}
                       className="flex-1 bg-[#1a1a25] border border-white/10 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 rounded-2xl p-4 outline-none transition-all text-base md:text-lg disabled:opacity-50 font-mono"
                     />
-                    <button 
+                    <button
                       onClick={handleVerifyAccount}
                       disabled={!playerId || isVerifying}
                       className="px-8 py-4 bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-cyan-400 rounded-2xl font-black uppercase tracking-widest flex items-center justify-center gap-2 transition-all disabled:opacity-30 whitespace-nowrap text-xs"
@@ -374,43 +434,55 @@ const App = () => {
 
                   {accountData && (
                     <div className="mt-6 animate-in slide-in-from-top-2 duration-300">
-                      <div className="bg-gradient-to-r from-cyan-500/10 to-transparent border border-cyan-500/20 rounded-2xl p-4 md:p-6 flex flex-col sm:flex-row items-center gap-6">
-                        <div className={`w-16 h-16 rounded-2xl ${accountData.avatarColor} flex items-center justify-center text-white shadow-xl shadow-cyan-500/20 flex-shrink-0`}>
-                          <UserCircle2 className="w-10 h-10" />
-                        </div>
-                        <div className="flex-1 text-center sm:text-left">
-                          <div className="flex items-center justify-center sm:justify-start gap-2 mb-1">
-                            <h4 className="text-lg md:text-xl font-black text-white font-['Outfit']">{accountData.username}</h4>
-                            <span className="text-[10px] bg-cyan-500 text-black px-2 py-0.5 rounded font-black uppercase">
-                              {accountData.isRealProfile ? 'Verified Pro' : 'Active Account'}
-                            </span>
+                      {accountData.notFound ? (
+                        <div className="bg-red-500/10 border border-red-500/30 rounded-2xl p-5 flex items-center gap-4">
+                          <div className="w-12 h-12 rounded-xl bg-red-500/20 flex items-center justify-center flex-shrink-0">
+                            <UserCircle2 className="w-7 h-7 text-red-400" />
                           </div>
-                          <div className="flex justify-center sm:justify-start gap-4 text-[10px] md:text-xs font-bold text-gray-500">
-                            <span className="flex items-center gap-1"><Trophy className="w-3.5 h-3.5 text-yellow-500" /> Lv. {accountData.level}</span>
-                            <span className="flex items-center gap-1 uppercase"><Globe className="w-3.5 h-3.5 text-blue-400" /> {accountData.region}</span>
+                          <div>
+                            <p className="font-black text-red-400 text-sm">Player Not Found</p>
+                            <p className="text-xs text-gray-500 mt-1">No PUBG account found for <span className="text-white font-mono">"{playerId}"</span>. Check the username and try again.</p>
                           </div>
                         </div>
-                        <div className="text-center sm:text-right border-t sm:border-t-0 border-white/5 pt-4 sm:pt-0 w-full sm:w-auto">
+                      ) : (
+                        <div className="bg-gradient-to-r from-cyan-500/10 to-transparent border border-cyan-500/20 rounded-2xl p-4 md:p-6 flex flex-col sm:flex-row items-center gap-6">
+                          <div className={`w-16 h-16 rounded-2xl ${accountData.avatarColor} flex items-center justify-center text-white shadow-xl shadow-cyan-500/20 flex-shrink-0`}>
+                            <UserCircle2 className="w-10 h-10" />
+                          </div>
+                          <div className="flex-1 text-center sm:text-left">
+                            <div className="flex items-center justify-center sm:justify-start gap-2 mb-1">
+                              <h4 className="text-lg md:text-xl font-black text-white font-['Outfit']">{accountData.username}</h4>
+                              <span className={`text-[10px] px-2 py-0.5 rounded font-black uppercase ${accountData.isRealProfile ? 'bg-green-500 text-black' : 'bg-cyan-500 text-black'}`}>
+                                {accountData.isRealProfile ? '✓ Verified' : 'Active Account'}
+                              </span>
+                            </div>
+                            <div className="flex justify-center sm:justify-start gap-4 text-[10px] md:text-xs font-bold text-gray-500">
+                              {accountData.level && <span className="flex items-center gap-1"><Trophy className="w-3.5 h-3.5 text-yellow-500" /> Lv. {accountData.level}</span>}
+                              <span className="flex items-center gap-1 uppercase"><Globe className="w-3.5 h-3.5 text-blue-400" /> {accountData.region}</span>
+                              {accountData.accountId && <span className="font-mono text-gray-600 truncate max-w-[120px]">{accountData.accountId.slice(0, 16)}…</span>}
+                            </div>
+                          </div>
+                          <div className="text-center sm:text-right border-t sm:border-t-0 border-white/5 pt-4 sm:pt-0 w-full sm:w-auto">
                             <div className="text-[10px] font-black text-gray-500 uppercase tracking-tighter">Current Balance</div>
                             <div className="text-xl md:text-2xl font-black text-cyan-400">{accountData.currentBalance} {selectedService.unit}</div>
+                          </div>
                         </div>
-                      </div>
+                      )}
                     </div>
                   )}
                 </div>
 
-                <div className={`transition-all duration-500 ${accountData ? 'opacity-100' : 'opacity-10 pointer-events-none'}`}>
+                <div className={`transition-all duration-500 ${accountData && !accountData.notFound ? 'opacity-100' : 'opacity-10 pointer-events-none'}`}>
                   <h3 className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-4">Step 2: Select or Enter Amount</h3>
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-4">
                     {selectedService.packages.map((pkg) => (
                       <button
                         key={pkg.id}
                         onClick={() => { setSelectedPackage(pkg); setCustomAmount(''); }}
-                        className={`relative p-4 md:p-5 rounded-2xl border transition-all ${
-                          selectedPackage?.id === pkg.id
-                          ? 'border-cyan-400 bg-cyan-400/10 shadow-[0_0_20px_-10px_rgba(34,211,238,0.3)]'
-                          : 'border-white/5 bg-white/5 hover:border-white/20'
-                        }`}
+                        className={`relative p-4 md:p-5 rounded-2xl border transition-all ${selectedPackage?.id === pkg.id
+                            ? 'border-cyan-400 bg-cyan-400/10 shadow-[0_0_20px_-10px_rgba(34,211,238,0.3)]'
+                            : 'border-white/5 bg-white/5 hover:border-white/20'
+                          }`}
                       >
                         <div className="font-black text-xl md:text-2xl text-white mb-1">{pkg.amount}</div>
                         <div className="text-[10px] font-bold text-cyan-400 uppercase tracking-widest">{selectedService.unit}</div>
@@ -460,11 +532,10 @@ const App = () => {
                   <button
                     disabled={!resolvedAmount || !accountData}
                     onClick={handleConfirmPurchase}
-                    className={`w-full py-5 rounded-2xl font-black text-base md:text-lg flex items-center justify-center gap-3 transition-all ${
-                      !resolvedAmount || !accountData
-                      ? 'bg-gray-800 text-gray-500 cursor-not-allowed'
-                      : 'bg-gradient-to-r from-cyan-500 to-blue-600 hover:shadow-xl hover:shadow-cyan-500/20 text-white hover:scale-[1.01]'
-                    }`}
+                    className={`w-full py-5 rounded-2xl font-black text-base md:text-lg flex items-center justify-center gap-3 transition-all ${!resolvedAmount || !accountData
+                        ? 'bg-gray-800 text-gray-500 cursor-not-allowed'
+                        : 'bg-gradient-to-r from-cyan-500 to-blue-600 hover:shadow-xl hover:shadow-cyan-500/20 text-white hover:scale-[1.01]'
+                      }`}
                   >
                     <PlusCircle className="w-6 h-6" />
                     Complete Delivery
@@ -525,32 +596,32 @@ const App = () => {
         {/* VIEW: ADMIN LOGIN */}
         {view === 'adminLogin' && (
           <div className="max-md mx-auto animate-in zoom-in-95 duration-500">
-             <div className="bg-[#13131a] border border-white/10 rounded-3xl p-10 shadow-2xl">
-                <div className="flex items-center gap-4 mb-8">
-                  <div className="bg-white/5 p-4 rounded-2xl text-cyan-400"><Settings className="w-8 h-8" /></div>
-                  <h2 className="text-2xl font-black uppercase tracking-tighter">Internal Dashboard</h2>
+            <div className="bg-[#13131a] border border-white/10 rounded-3xl p-10 shadow-2xl">
+              <div className="flex items-center gap-4 mb-8">
+                <div className="bg-white/5 p-4 rounded-2xl text-cyan-400"><Settings className="w-8 h-8" /></div>
+                <h2 className="text-2xl font-black uppercase tracking-tighter">Internal Dashboard</h2>
+              </div>
+              <div className="space-y-6">
+                <div>
+                  <label className="block text-[10px] font-black text-gray-500 uppercase tracking-[4px] mb-3 ml-1 text-center">Authorization Key</label>
+                  <input
+                    type="password"
+                    value={adminPass}
+                    onChange={(e) => setAdminPass(e.target.value)}
+                    placeholder="••••••••"
+                    className="w-full bg-[#1a1a25] border border-white/10 focus:border-cyan-500 rounded-2xl p-4 outline-none text-center tracking-[10px]"
+                  />
+                  {adminError && <p className="mt-2 text-xs text-red-500 font-bold text-center">{adminError}</p>}
+                  <p className="mt-4 text-[10px] text-gray-600 font-bold text-center italic"></p>
                 </div>
-                <div className="space-y-6">
-                  <div>
-                    <label className="block text-[10px] font-black text-gray-500 uppercase tracking-[4px] mb-3 ml-1 text-center">Authorization Key</label>
-                    <input 
-                      type="password"
-                      value={adminPass}
-                      onChange={(e) => setAdminPass(e.target.value)}
-                      placeholder="••••••••"
-                      className="w-full bg-[#1a1a25] border border-white/10 focus:border-cyan-500 rounded-2xl p-4 outline-none text-center tracking-[10px]"
-                    />
-                    {adminError && <p className="mt-2 text-xs text-red-500 font-bold text-center">{adminError}</p>}
-                    <p className="mt-4 text-[10px] text-gray-600 font-bold text-center italic">Pass: admin123</p>
-                  </div>
-                  <button 
-                    onClick={handleAdminLogin}
-                    className="w-full py-4 bg-white text-black rounded-2xl font-black uppercase text-sm hover:bg-cyan-400 transition-all"
-                  >
-                    Authenticate
-                  </button>
-                </div>
-             </div>
+                <button
+                  onClick={handleAdminLogin}
+                  className="w-full py-4 bg-white text-black rounded-2xl font-black uppercase text-sm hover:bg-cyan-400 transition-all"
+                >
+                  Authenticate
+                </button>
+              </div>
+            </div>
           </div>
         )}
 
@@ -585,17 +656,17 @@ const App = () => {
                         {globalStock[s.id].toLocaleString()} <span className="text-[10px] text-cyan-400 uppercase">{s.unit}</span>
                       </div>
                       <div className="flex gap-2">
-                        <input 
+                        <input
                           type="number"
                           placeholder="+ refill"
                           value={inventoryUpdateAmount[s.id]}
-                          onChange={(e) => setInventoryUpdateAmount({...inventoryUpdateAmount, [s.id]: e.target.value})}
+                          onChange={(e) => setInventoryUpdateAmount({ ...inventoryUpdateAmount, [s.id]: e.target.value })}
                           className="flex-1 bg-[#1a1a25] border border-white/10 rounded-lg p-2 outline-none focus:border-cyan-500 text-xs text-white"
                         />
-                        <button 
+                        <button
                           onClick={() => {
                             updateGlobalStock(s.id, inventoryUpdateAmount[s.id]);
-                            setInventoryUpdateAmount({...inventoryUpdateAmount, [s.id]: ''});
+                            setInventoryUpdateAmount({ ...inventoryUpdateAmount, [s.id]: '' });
                           }}
                           className="p-2 bg-cyan-500 text-black rounded-lg hover:bg-cyan-600 transition-colors"
                         >
@@ -614,7 +685,7 @@ const App = () => {
                 <div className="space-y-4 md:space-y-5">
                   <div>
                     <label className="block text-[10px] font-black text-gray-500 uppercase mb-2 tracking-widest">Target Player ID / Code</label>
-                    <input 
+                    <input
                       type="text"
                       placeholder="e.g. 512345"
                       value={adminTargetId}
@@ -624,7 +695,7 @@ const App = () => {
                   </div>
                   <div>
                     <label className="block text-[10px] font-black text-gray-500 uppercase mb-2 tracking-widest">Assign Profile Name</label>
-                    <input 
+                    <input
                       type="text"
                       placeholder="e.g. ProGamer_99"
                       value={adminTargetUsername}
@@ -635,7 +706,7 @@ const App = () => {
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <label className="block text-[10px] font-black text-gray-500 uppercase mb-2 tracking-widest">Currency</label>
-                      <select 
+                      <select
                         value={adminTargetService}
                         onChange={(e) => setAdminTargetService(e.target.value)}
                         className="w-full bg-[#1a1a25] border border-white/10 rounded-xl p-3 outline-none focus:border-cyan-500 appearance-none text-[10px]"
@@ -647,7 +718,7 @@ const App = () => {
                     </div>
                     <div>
                       <label className="block text-[10px] font-black text-gray-500 uppercase mb-2 tracking-widest">Add Amount</label>
-                      <input 
+                      <input
                         type="number"
                         placeholder="0"
                         value={adminAddAmount}
@@ -656,7 +727,7 @@ const App = () => {
                       />
                     </div>
                   </div>
-                  <button 
+                  <button
                     id="admin-btn"
                     onClick={handleAdminUpdate}
                     className="w-full py-4 bg-cyan-500 hover:bg-cyan-600 text-black font-black uppercase rounded-xl transition-all shadow-lg shadow-cyan-500/20 mt-4 text-xs"
@@ -668,7 +739,7 @@ const App = () => {
 
               <div className="bg-[#13131a] border border-white/10 rounded-3xl p-6 md:p-8">
                 <h3 className="text-lg md:text-xl font-black mb-6 flex items-center gap-2 text-purple-400 font-['Outfit']">
-                   <UserCircle2 className="w-5 h-5" /> Registered Pros
+                  <UserCircle2 className="w-5 h-5" /> Registered Pros
                 </h3>
                 <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
                   {Object.keys(userDatabase).length === 0 ? (
@@ -678,25 +749,25 @@ const App = () => {
                       <div key={id} className="bg-white/5 border border-white/5 p-4 rounded-xl flex items-center justify-between group">
                         <div className="flex-1">
                           <div className="font-bold text-white text-xs md:text-sm flex items-center gap-2">
-                            {data.username || 'Unassigned'} 
+                            {data.username || 'Unassigned'}
                             <span className="text-[10px] text-gray-600 font-mono">#{id}</span>
                           </div>
                           <div className="flex gap-4 mt-2">
-                             <div className="flex flex-col">
-                                <span className="text-[8px] text-orange-500 font-black uppercase">UC</span>
-                                <span className="text-[10px] md:text-xs font-black">{data.balances.pubg || 0}</span>
-                             </div>
-                             <div className="flex flex-col">
-                                <span className="text-[8px] text-cyan-500 font-black uppercase">DIA</span>
-                                <span className="text-[10px] md:text-xs font-black">{data.balances.freefire || 0}</span>
-                             </div>
-                             <div className="flex flex-col">
-                                <span className="text-[8px] text-pink-500 font-black uppercase">COINS</span>
-                                <span className="text-[10px] md:text-xs font-black">{data.balances.tiktok || 0}</span>
-                             </div>
+                            <div className="flex flex-col">
+                              <span className="text-[8px] text-orange-500 font-black uppercase">UC</span>
+                              <span className="text-[10px] md:text-xs font-black">{data.balances.pubg || 0}</span>
+                            </div>
+                            <div className="flex flex-col">
+                              <span className="text-[8px] text-cyan-500 font-black uppercase">DIA</span>
+                              <span className="text-[10px] md:text-xs font-black">{data.balances.freefire || 0}</span>
+                            </div>
+                            <div className="flex flex-col">
+                              <span className="text-[8px] text-pink-500 font-black uppercase">COINS</span>
+                              <span className="text-[10px] md:text-xs font-black">{data.balances.tiktok || 0}</span>
+                            </div>
                           </div>
                         </div>
-                        <button 
+                        <button
                           onClick={() => { setAdminTargetId(id); setAdminTargetUsername(data.username); }}
                           className="p-2 opacity-100 md:opacity-0 group-hover:opacity-100 bg-white/5 hover:bg-white/10 rounded-lg transition-all"
                         >
@@ -740,11 +811,11 @@ const App = () => {
                       </div>
                     </div>
                     <div className="flex items-center justify-between md:justify-end gap-6 border-t md:border-t-0 border-white/5 pt-4 md:pt-0">
-                       <div className="text-left md:text-right">
-                         <div className="text-[8px] text-gray-500 uppercase font-black tracking-widest">Delivered</div>
-                         <div className="text-xl font-black text-cyan-400">+{order.amount}</div>
-                       </div>
-                       <div className="bg-green-500/10 text-green-500 px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest border border-green-500/20">Verified</div>
+                      <div className="text-left md:text-right">
+                        <div className="text-[8px] text-gray-500 uppercase font-black tracking-widest">Delivered</div>
+                        <div className="text-xl font-black text-cyan-400">+{order.amount}</div>
+                      </div>
+                      <div className="bg-green-500/10 text-green-500 px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest border border-green-500/20">Verified</div>
                     </div>
                   </div>
                 ))}
