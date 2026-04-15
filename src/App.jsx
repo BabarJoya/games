@@ -389,15 +389,24 @@ const App = () => {
     const existingName = dbUser?.username || null;
 
     // ── PUBG: real API lookup ──
+    // Dev: uses Vite proxy (/pubg-api → api.pubg.com)
+    // Prod: uses Vercel serverless function (/api/pubg)
+    const fetchPubgShard = (shard, name) => {
+      if (import.meta.env.DEV) {
+        return fetch(
+          `/pubg-api/shards/${shard}/players?filter[playerNames]=${encodeURIComponent(name)}`,
+          { headers: { 'Accept': 'application/vnd.api+json' } }
+        );
+      }
+      return fetch(`/api/pubg?shard=${shard}&playerName=${encodeURIComponent(name)}`);
+    };
+
     if (selectedService.id === 'pubg') {
       try {
         const shards = ['steam', 'kakao', 'psn', 'xbox'];
         let found = null;
         for (const shard of shards) {
-          const res = await fetch(
-            `/pubg-api/shards/${shard}/players?filter[playerNames]=${encodeURIComponent(cleanId)}`,
-            { headers: { 'Accept': 'application/vnd.api+json' } }
-          );
+          const res = await fetchPubgShard(shard, cleanId);
           if (res.ok) {
             const json = await res.json();
             if (json.data?.length > 0) { found = { player: json.data[0], shard }; break; }
