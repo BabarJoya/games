@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { createClient } from '@supabase/supabase-js';
 import {
   Gamepad2, Diamond, Music2, ArrowLeft, ChevronRight,
   CheckCircle2, History, Zap, Loader2, Trophy, ShoppingBag,
@@ -51,45 +52,111 @@ const extractTikTokUsername = (input) => {
   return input;
 };
 
-// ─── API HELPERS (all calls go through Vite proxy → json-server:3001) ────────
+// ─── SUPABASE CLIENT ─────────────────────────────────────────────────────────
+const supabase = createClient(
+  'https://crqdrzxfrcijbhzsetpu.supabase.co',
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNycWRyenhmcmNpamJoenNldHB1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYyNjg2NDgsImV4cCI6MjA5MTg0NDY0OH0.jyH9EM4Tq7_F3PUiZZvdTaR7aK_oCk6Y8IIAqgcnOQo'
+);
+
+// ─── DATA MAPPERS (Supabase snake_case ↔ app camelCase) ───────────────────────
+const mapUser = (u) => !u ? null : {
+  id: u.id, uid: u.uid, username: u.username || '',
+  pubg: u.pubg || 0, freefire: u.freefire || 0, tiktok: u.tiktok || 0,
+};
+const mapOrder = (o) => !o ? null : {
+  id: o.id, service: o.service, serviceId: o.service_id,
+  amount: o.amount, unit: o.unit, playerId: o.player_id,
+  username: o.username, date: o.date, newTotal: o.new_total,
+};
+const mapAudit = (a) => !a ? null : {
+  id: a.id, action: a.action, targetId: a.target_id,
+  service: a.service, delta: a.delta,
+  before: a.before_val, after: a.after_val,
+  count: a.count_val, newTotal: a.new_total,
+  timestamp: a.timestamp,
+};
+
+// ─── API HELPERS (Supabase) ───────────────────────────────────────────────────
 const api = {
   users: {
-    getAll: () => fetch('/api/users').then(r => r.json()),
-    getByUid: async (uid) => {
-      const res = await fetch(`/api/users?uid=${encodeURIComponent(uid)}`);
-      const list = await res.json();
-      return list[0] || null;
+    getAll: async () => {
+      const { data, error } = await supabase.from('users').select('*').order('id');
+      if (error) throw error;
+      return (data || []).map(mapUser);
     },
-    create: (user) => fetch('/api/users', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(user)
-    }).then(r => r.json()),
-    update: (id, data) => fetch(`/api/users/${id}`, {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data)
-    }).then(r => r.json()),
-    delete: (id) => fetch(`/api/users/${id}`, { method: 'DELETE' }),
+    getByUid: async (uid) => {
+      const { data, error } = await supabase.from('users').select('*').eq('uid', uid).maybeSingle();
+      if (error) throw error;
+      return mapUser(data);
+    },
+    create: async (user) => {
+      const { data, error } = await supabase.from('users')
+        .insert({ uid: user.uid, username: user.username || '', pubg: user.pubg || 0, freefire: user.freefire || 0, tiktok: user.tiktok || 0 })
+        .select().single();
+      if (error) throw error;
+      return mapUser(data);
+    },
+    update: async (id, user) => {
+      const { data, error } = await supabase.from('users')
+        .update({ uid: user.uid, username: user.username, pubg: user.pubg || 0, freefire: user.freefire || 0, tiktok: user.tiktok || 0 })
+        .eq('id', id).select().single();
+      if (error) throw error;
+      return mapUser(data);
+    },
+    delete: async (id) => {
+      const { error } = await supabase.from('users').delete().eq('id', id);
+      if (error) throw error;
+    },
   },
   orders: {
-    getAll: () => fetch('/api/orders').then(r => r.json()),
-    create: (order) => fetch('/api/orders', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(order)
-    }).then(r => r.json()),
+    getAll: async () => {
+      const { data, error } = await supabase.from('orders').select('*').order('created_at', { ascending: false });
+      if (error) throw error;
+      return (data || []).map(mapOrder);
+    },
+    create: async (order) => {
+      const { data, error } = await supabase.from('orders')
+        .insert({
+          id: order.id, service: order.service, service_id: order.serviceId,
+          amount: order.amount, unit: order.unit, player_id: order.playerId,
+          username: order.username, date: order.date, new_total: order.newTotal,
+        })
+        .select().single();
+      if (error) throw error;
+      return mapOrder(data);
+    },
   },
   stock: {
-    getAll: () => fetch('/api/stock').then(r => r.json()),
-    update: (id, amount) => fetch(`/api/stock/${id}`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ amount })
-    }).then(r => r.json()),
+    getAll: async () => {
+      const { data, error } = await supabase.from('stock').select('*');
+      if (error) throw error;
+      return data || [];
+    },
+    update: async (id, amount) => {
+      const { data, error } = await supabase.from('stock').update({ amount }).eq('id', id).select().single();
+      if (error) throw error;
+      return data;
+    },
   },
   audit: {
-    getAll: () => fetch('/api/audit').then(r => r.json()),
-    create: (entry) => fetch('/api/audit', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(entry)
-    }).then(r => r.json()),
+    getAll: async () => {
+      const { data, error } = await supabase.from('audit').select('*').order('id', { ascending: false }).limit(200);
+      if (error) throw error;
+      return (data || []).map(mapAudit);
+    },
+    create: async (entry) => {
+      const row = {
+        action: entry.action, target_id: entry.targetId,
+        service: entry.service, delta: entry.delta,
+        before_val: entry.before, after_val: entry.after,
+        count_val: entry.count, new_total: entry.newTotal,
+        timestamp: entry.timestamp,
+      };
+      Object.keys(row).forEach(k => row[k] === undefined && delete row[k]);
+      const { data, error } = await supabase.from('audit').insert(row).select().single();
+      if (error) throw error;
+      return mapAudit(data);
+    },
   },
 };
 

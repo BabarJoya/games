@@ -6,11 +6,7 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     proxy: {
-      '/api': {
-        target: 'http://localhost:3001',
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, ''),
-      },
+      // PUBG API proxy (avoids CORS in dev — on Vercel use edge functions if needed)
       '/pubg-api': {
         target: 'https://api.pubg.com',
         changeOrigin: true,
