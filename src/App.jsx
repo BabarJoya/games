@@ -90,22 +90,35 @@ const App = () => {
   // Mock Database for User Data (Balances + Profiles)
   const [userDatabase, setUserDatabase] = useState({}); // { 'id': { balances: {pubg: 0}, username: 'Name' } }
   
-  // Admin State
+  // Admin State & Global Inventory
+  const [globalStock, setGlobalStock] = useState({ pubg: 0, freefire: 0, tiktok: 0 });
   const [adminPass, setAdminPass] = useState('');
   const [adminError, setAdminError] = useState('');
   const [adminAddAmount, setAdminAddAmount] = useState('');
   const [adminTargetId, setAdminTargetId] = useState('');
   const [adminTargetUsername, setAdminTargetUsername] = useState('');
   const [adminTargetService, setAdminTargetService] = useState('pubg');
+  const [inventoryUpdateAmount, setInventoryUpdateAmount] = useState({ pubg: '', freefire: '', tiktok: '' });
 
   // Load state from localStorage
   useEffect(() => {
     const savedHistory = localStorage.getItem('nexus_order_history');
     if (savedHistory) setHistory(JSON.parse(savedHistory));
     
-    const savedDatabase = localStorage.getItem('nexus_user_balances'); // Kept key name for migration compatibility
+    const savedDatabase = localStorage.getItem('nexus_user_balances');
     if (savedDatabase) setUserDatabase(JSON.parse(savedDatabase));
+
+    const savedInventory = localStorage.getItem('nexus_global_inventory');
+    if (savedInventory) setGlobalStock(JSON.parse(savedInventory));
   }, []);
+
+  const updateGlobalStock = (serviceKey, amount) => {
+    setGlobalStock(prev => {
+      const updated = { ...prev, [serviceKey]: (prev[serviceKey] || 0) + parseInt(amount || 0) };
+      localStorage.setItem('nexus_global_inventory', JSON.stringify(updated));
+      return updated;
+    });
+  };
 
   const updateUserData = (id, serviceKey, amount, customUsername) => {
     const currentDb = { ...userDatabase };
@@ -170,11 +183,21 @@ const App = () => {
 
   const handleConfirmPurchase = () => {
     if (!resolvedAmount || !playerId || !accountData) return;
+    
+    // Check stock before proceeding
+    if (globalStock[selectedService.id] < resolvedAmount) {
+      alert(`Insufficient Global Stock! Only ${globalStock[selectedService.id]} ${selectedService.unit} left.`);
+      return;
+    }
 
     setView('processing');
 
     setTimeout(() => {
       const updatedUser = updateUserData(playerId, selectedService.id, resolvedAmount);
+      
+      // Deduct from Global Inventory
+      updateGlobalStock(selectedService.id, -resolvedAmount);
+
       const order = {
         id: 'PS-' + Math.random().toString(36).substr(2, 9).toUpperCase(),
         service: selectedService.name,
@@ -309,11 +332,17 @@ const App = () => {
             <div className="bg-[#13131a] border border-white/10 rounded-3xl overflow-hidden shadow-2xl">
               <div className={`h-2 bg-gradient-to-r ${selectedService.color}`} />
               <div className="p-5 md:p-8">
-                <div className="flex items-center gap-4 mb-8">
-                  <div className="bg-white/5 p-3 md:p-4 rounded-2xl">{selectedService.icon}</div>
-                  <div>
-                    <h2 className="text-2xl md:text-3xl font-black font-['Outfit']">{selectedService.name}</h2>
-                    <p className="text-gray-500 text-[10px] md:text-sm uppercase font-bold tracking-tighter">Professional Verification & Deposit</p>
+                <div className="flex items-center justify-between mb-8">
+                  <div className="flex items-center gap-4">
+                    <div className="bg-white/5 p-3 md:p-4 rounded-2xl">{selectedService.icon}</div>
+                    <div>
+                      <h2 className="text-2xl md:text-3xl font-black font-['Outfit']">{selectedService.name}</h2>
+                      <p className="text-gray-500 text-[10px] md:text-sm uppercase font-bold tracking-tighter">Professional Verification & Deposit</p>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-1">Stock Available</div>
+                    <div className="text-lg md:text-xl font-black text-white">{globalStock[selectedService.id].toLocaleString()} <span className="text-cyan-400 text-[10px]">{selectedService.unit}</span></div>
                   </div>
                 </div>
 
@@ -536,7 +565,48 @@ const App = () => {
               <button onClick={() => setView('home')} className="px-6 py-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-full font-bold text-[10px] uppercase transition-all">Exit Dashboard</button>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 md:gap-8">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 md:gap-8">
+              {/* Inventory Management */}
+              <div className="bg-[#13131a] border border-white/10 rounded-3xl p-6 md:p-8 lg:col-span-3">
+                <div className="flex justify-between items-center mb-6">
+                  <h3 className="text-lg md:text-xl font-black flex items-center gap-2 font-['Outfit']">
+                    <ShoppingBag className="w-5 h-5 text-cyan-400" /> Global Inventory Stock
+                  </h3>
+                  <div className="text-[10px] font-bold text-gray-500 uppercase">Live Updates Enabled</div>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  {SERVICES.map(s => (
+                    <div key={s.id} className="bg-white/5 border border-white/5 p-5 rounded-2xl">
+                      <div className="flex justify-between items-center mb-4">
+                        <span className="text-xs font-bold text-gray-400 uppercase">{s.name}</span>
+                        <div className={`w-2 h-2 rounded-full ${globalStock[s.id] > 0 ? 'bg-green-500' : 'bg-red-500'}`} />
+                      </div>
+                      <div className="text-2xl font-black text-white mb-4">
+                        {globalStock[s.id].toLocaleString()} <span className="text-[10px] text-cyan-400 uppercase">{s.unit}</span>
+                      </div>
+                      <div className="flex gap-2">
+                        <input 
+                          type="number"
+                          placeholder="+ refill"
+                          value={inventoryUpdateAmount[s.id]}
+                          onChange={(e) => setInventoryUpdateAmount({...inventoryUpdateAmount, [s.id]: e.target.value})}
+                          className="flex-1 bg-[#1a1a25] border border-white/10 rounded-lg p-2 outline-none focus:border-cyan-500 text-xs text-white"
+                        />
+                        <button 
+                          onClick={() => {
+                            updateGlobalStock(s.id, inventoryUpdateAmount[s.id]);
+                            setInventoryUpdateAmount({...inventoryUpdateAmount, [s.id]: ''});
+                          }}
+                          className="p-2 bg-cyan-500 text-black rounded-lg hover:bg-cyan-600 transition-colors"
+                        >
+                          <PlusCircle className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
               <div className="bg-[#13131a] border border-white/10 rounded-3xl p-6 md:p-8">
                 <h3 className="text-lg md:text-xl font-black mb-6 flex items-center gap-2 font-['Outfit']">
                   <PlusCircle className="w-5 h-5 text-green-400" /> Adjust Balances
